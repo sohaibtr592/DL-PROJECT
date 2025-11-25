@@ -131,7 +131,7 @@ def describe_time_window(series_vals):
     txt = (
         f"- Valeur minimale : **{val_min:.3f}**  \n"
         f"- Valeur maximale : **{val_max:.3f}**  \n"
-        f("- Valeur moyenne : **{val_mean:.3f}**  \n")
+        f"- Valeur moyenne : **{val_mean:.3f}**  \n"
         f"- Tendance sur la fenêtre : {trend}  \n"
         f"- Comportement général : {vol_text}."
     )
@@ -154,7 +154,7 @@ def describe_proba_distribution(proba_df):
         ratio = np.inf
 
     if ratio > 3:
-        conf_text = "Le modèle est **très confiant** (la probabilité de la classe 1 est largement supérieure aux autres)."
+        conf_text = "Le modèle est **très confiant** (la première classe est largement dominante)."
     elif ratio > 1.5:
         conf_text = "Le modèle est **modérément confiant** (la première classe domine mais les suivantes restent non négligeables)."
     else:
@@ -494,4 +494,3 @@ with st.expander("📊 Résumé des performances globales (sur le jeu de test)",
     comment **ML classique** et **Deep Learning séquentiel** se comportent sur les mêmes données,
     et d'interpréter leurs décisions via les courbes temporelles et les distributions de probabilités.
     """)
-
