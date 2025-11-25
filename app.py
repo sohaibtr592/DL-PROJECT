@@ -99,6 +99,74 @@ def create_seq_from_index(X_all_scaled, idx_last, seq_len=10):
     return X_seq
 
 
+def describe_time_window(series_vals):
+    """
+    Génère un court résumé textuel d'une série temporelle :
+    min, max, moyenne, tendance, volatilité.
+    """
+    val_min = float(np.min(series_vals))
+    val_max = float(np.max(series_vals))
+    val_mean = float(np.mean(series_vals))
+    start_val = float(series_vals[0])
+    end_val = float(series_vals[-1])
+    amplitude = max(val_max - val_min, 1e-8)
+    delta = end_val - start_val
+
+    # tendance globale
+    if delta > 0.15 * amplitude:
+        trend = "globalement **croissante**"
+    elif delta < -0.15 * amplitude:
+        trend = "globalement **décroissante**"
+    else:
+        trend = "globalement **stable**"
+
+    vol = float(np.std(series_vals))
+    if vol < 0.1 * amplitude:
+        vol_text = "peu variable (faible volatilité)"
+    elif vol < 0.3 * amplitude:
+        vol_text = "modérément variable"
+    else:
+        vol_text = "très variable (forte volatilité)"
+
+    txt = (
+        f"- Valeur minimale : **{val_min:.3f}**  \n"
+        f"- Valeur maximale : **{val_max:.3f}**  \n"
+        f("- Valeur moyenne : **{val_mean:.3f}**  \n")
+        f"- Tendance sur la fenêtre : {trend}  \n"
+        f"- Comportement général : {vol_text}."
+    )
+    return txt
+
+
+def describe_proba_distribution(proba_df):
+    """
+    Analyse la distribution de probas : classe dominante + niveau de confiance.
+    proba_df doit être trié par probabilité décroissante.
+    """
+    top = proba_df.iloc[0]
+    cls = int(top["id_class"])
+    p_max = float(top["probabilité"])
+
+    if len(proba_df) > 1:
+        p_second = float(proba_df.iloc[1]["probabilité"])
+        ratio = p_max / max(p_second, 1e-8)
+    else:
+        ratio = np.inf
+
+    if ratio > 3:
+        conf_text = "Le modèle est **très confiant** (la probabilité de la classe 1 est largement supérieure aux autres)."
+    elif ratio > 1.5:
+        conf_text = "Le modèle est **modérément confiant** (la première classe domine mais les suivantes restent non négligeables)."
+    else:
+        conf_text = "Le modèle est **peu confiant** (plusieurs classes ont des probabilités proches)."
+
+    txt = (
+        f"- Classe la plus probable : **{cls}** avec p = **{p_max:.3f}**.  \n"
+        f"- {conf_text}"
+    )
+    return txt
+
+
 # =====================================================
 # 4) CONFIG Streamlit + état
 # =====================================================
@@ -115,29 +183,48 @@ if "idx_last" not in st.session_state:
 
 
 # =====================================================
-# 5) En-tête + contexte
+# 5) En-tête + contexte (avec description dataset)
 # =====================================================
 
 st.title("🕒 Classification de signaux capteurs – ML vs Deep Learning")
 
-with st.expander("🧬 Contexte du projet", expanded=True):
-    st.markdown("""
-    Ce projet porte sur des **données de capteurs d'une montre** (accélération, gyroscope,
-    champ magnétique, angles, etc.), échantillonnées dans le temps.
+# On charge une première fois pour donner des chiffres dans le contexte
+df_meta, feature_cols_meta = load_data_and_features()
+n_samples, n_cols = df_meta.shape
+n_features = len(feature_cols_meta)
+n_classes = df_meta["id_class"].nunique()
 
-    - Les données forment une **série temporelle** : chaque ligne = un instant `timestamp`.
-    - Nous avons construit une cible **`id_class`** (regroupement d'IDs d'intervalle).
-    - **Phase 1 – Machine Learning** : modèles classiques (RandomForest, GradientBoosting, etc.).
-    - **Phase 2 – Deep Learning** : MLP, LSTM avec différentes méthodes d'optimisation (SGD, Momentum, RMSprop…).
+with st.expander("🧬 Contexte du projet et description des données", expanded=True):
+    st.markdown(f"""
+    Ce projet porte sur des **données de capteurs d'une montre connectée**.
+    
+    - Nombre d'échantillons après préparation : **{n_samples}**  
+    - Nombre de features utilisées comme entrée : **{n_features}**  
+      (accélérations, gyroscopes, champ magnétique, angles + quelques lags temporels)
+    - Nombre de classes finales `id_class` (après regroupement `id_group`) : **{n_classes}**
 
-    L'interface ci-dessous permet de comparer :
-    - 🌲 **RandomForest** (modèle tabulaire, non séquentiel)
-    - 🧠 **LSTM + RMSprop** (modèle séquentiel qui regarde les 10 derniers instants)
+    Chaque ligne du dataset correspond à **un instant temporel** :
+    `timestamp` + valeurs des capteurs.  
+    Les IDs d'intervalle ont été regroupés en **11 classes** plus équilibrées pour faciliter
+    l'apprentissage.
+
+    - **Phase 1 – Machine Learning classique :**
+      - Vérification que les données forment bien une **time series**
+      - Préparation / nettoyage / création de lags
+      - Entraînement de plusieurs modèles (Régression Logistique, RandomForest, Gradient Boosting…)
+
+    - **Phase 2 – Deep Learning :**
+      - Modèle **MLP** (multilayer perceptron) avec différents schémas de descente de gradient
+      - Modèle **LSTM** + RMSprop, qui exploite la dynamique sur une fenêtre de 10 instants
+
+    L'application ci-dessous permet de tester et comparer en direct :
+    - 🌲 un modèle **RandomForest** (ML tabulaire, non séquentiel)
+    - 🧠 un modèle **LSTM + RMSprop** (DL séquentiel sur fenêtre de 10 instants)
     """)
 
 
 # =====================================================
-# 6) Chargement des données
+# 6) Chargement des données pour l'app
 # =====================================================
 
 df, feature_cols = load_data_and_features()
@@ -237,7 +324,7 @@ st.markdown("---")
 
 
 # =====================================================
-# 9) Contexte temporel (fenêtre LSTM)
+# 9) Contexte temporel (fenêtre LSTM) + parsing du graphe
 # =====================================================
 
 st.subheader("📈 Contexte temporel utilisé par le LSTM")
@@ -255,6 +342,13 @@ st.caption(
     f"qui précèdent t (fenêtre d'entrée du LSTM)."
 )
 
+# Analyse textuelle automatique du graphe
+series_vals = window_df[feature_to_plot].values
+summary_text = describe_time_window(series_vals)
+
+st.markdown("**Résumé automatique de la fenêtre temporelle :**")
+st.info(summary_text)
+
 st.markdown("---")
 
 
@@ -271,7 +365,7 @@ with tab_rf:
     st.markdown("""
     **RandomForest** est un ensemble d'arbres de décision.
     Il ne traite pas directement la structure temporelle, mais des **features tabulaires**
-    (accélérations, gyroscopes, champs magnétiques, + lags que nous avons créés).
+    (accélérations, gyroscopes, champ magnétique, angles + lags créés lors de la Phase 1).
     """)
 
     rf = load_rf_model()
@@ -300,6 +394,10 @@ with tab_rf:
             top_df_rf.set_index("id_class")["probabilité"],
             height=250
         )
+
+    # Parsing / résumé du graphe de probas RF
+    st.markdown("**Analyse automatique des probabilités (RandomForest) :**")
+    st.info(describe_proba_distribution(proba_df_rf))
 
 
 # ---------- Onglet LSTM ----------
@@ -348,9 +446,33 @@ with tab_lstm:
             height=250
         )
 
+    # Parsing / résumé du graphe de probas LSTM
+    st.markdown("**Analyse automatique des probabilités (LSTM) :**")
+    st.info(describe_proba_distribution(proba_df_lstm))
+
 
 # =====================================================
-# 11) Résumé des performances globales
+# 11) Synthèse RF vs LSTM sur l’instant sélectionné
+# =====================================================
+
+st.markdown("---")
+st.subheader("🔍 Synthèse de comparaison des modèles pour l'instant t sélectionné")
+
+rf_ok = (pred_class_rf == true_class)
+lstm_ok = (pred_class_lstm == true_class)
+same_pred = (pred_class_rf == pred_class_lstm)
+
+txt_synth = f"""
+- 🌲 **RandomForest** : prédiction = `{pred_class_rf}` → {"✅ correcte" if rf_ok else "❌ incorrecte"}  
+- 🧠 **LSTM + RMSprop** : prédiction = `{pred_class_lstm}` → {"✅ correcte" if lstm_ok else "❌ incorrecte"}  
+- 🔁 Les deux modèles { "donnent la **même** classe." if same_pred else "donnent des **classes différentes**." }
+"""
+
+st.markdown(txt_synth)
+
+
+# =====================================================
+# 12) Résumé des performances globales
 # =====================================================
 
 st.markdown("---")
@@ -369,5 +491,7 @@ with st.expander("📊 Résumé des performances globales (sur le jeu de test)",
       - Meilleure prise en compte de la dynamique temporelle (fenêtre de 10 instants).
 
     👉 L'application Web permet de visualiser, pour un instant donné,
-    comment **ML classique** et **Deep Learning séquentiel** se comportent sur les mêmes données.
+    comment **ML classique** et **Deep Learning séquentiel** se comportent sur les mêmes données,
+    et d'interpréter leurs décisions via les courbes temporelles et les distributions de probabilités.
     """)
+
