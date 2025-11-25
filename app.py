@@ -440,45 +440,64 @@ with tab_rf:
     st.markdown("**Analyse automatique des probabilités (RandomForest) :**")
     st.info(describe_proba_distribution(proba_df_rf))
 
-    # ===== Explainability locale avec SHAP =====
+        # ===== Explainability locale avec SHAP =====
     st.markdown("---")
     st.subheader("🧐 Explication locale de la prédiction (SHAP)")
 
-    explainer = get_shap_explainer()
-    shap_values = explainer.shap_values(X_rf)
+    try:
+        explainer = get_shap_explainer()
+        shap_values = explainer.shap_values(X_rf)   # X_rf : (1, n_features)
 
-    # Pour un problème multi-classes, shap_values est une liste : un array par classe
-    classes_list = list(rf.classes_)
-    class_index = classes_list.index(pred_class_rf)
+        # Cas multi-classes (liste d'arrays) ou array unique
+        if isinstance(shap_values, list):
+            # shap_values[i] : (1, n_features) pour la classe rf.classes_[i]
+            classes_list = list(rf.classes_)
+            class_index = classes_list.index(pred_class_rf)
+            shap_vec = shap_values[class_index][0]
+        else:
+            # shap_values : (1, n_features)
+            shap_vec = shap_values[0]
 
-    shap_for_pred = shap_values[class_index][0]  # (n_features,)
-    shap_df = pd.DataFrame({
-        "feature": feature_cols,
-        "shap_value": shap_for_pred,
-        "importance_abs": np.abs(shap_for_pred)
-    }).sort_values("importance_abs", ascending=False)
+        shap_vec = np.array(shap_vec).reshape(-1)
 
-    top_k_shap = 10
-    top_shap_df = shap_df.head(top_k_shap)
+        # Sécurité : s'assurer que la longueur correspond au nombre de features
+        n_feat = len(feature_cols)
+        if len(shap_vec) != n_feat:
+            min_len = min(len(shap_vec), n_feat)
+            shap_vec = shap_vec[:min_len]
+            feat_for_shap = feature_cols[:min_len]
+        else:
+            feat_for_shap = feature_cols
 
-    c_s1, c_s2 = st.columns(2)
-    with c_s1:
-        st.write(f"**Top {top_k_shap} features les plus influentes (SHAP) :**")
-        st.dataframe(
-            top_shap_df[["feature", "shap_value"]],
-            use_container_width=True
+        shap_df = pd.DataFrame({
+            "feature": feat_for_shap,
+            "shap_value": shap_vec,
+            "importance_abs": np.abs(shap_vec)
+        }).sort_values("importance_abs", ascending=False)
+
+        top_k_shap = 10
+        top_shap_df = shap_df.head(top_k_shap)
+
+        c_s1, c_s2 = st.columns(2)
+        with c_s1:
+            st.write(f"**Top {top_k_shap} features les plus influentes (SHAP) :**")
+            st.dataframe(
+                top_shap_df[["feature", "shap_value"]],
+                use_container_width=True
+            )
+        with c_s2:
+            st.bar_chart(
+                top_shap_df.set_index("feature")["importance_abs"],
+                height=300
+            )
+
+        st.caption(
+            "Les valeurs positives poussent la prédiction vers la classe actuelle, "
+            "les valeurs négatives la poussent dans la direction opposée."
         )
-    with c_s2:
-        st.bar_chart(
-            top_shap_df.set_index("feature")["importance_abs"],
-            height=300
-        )
 
-    st.caption(
-        "Les valeurs positives poussent la prédiction vers la classe actuelle, "
-        "les valeurs négatives la poussent dans la direction opposée."
-    )
-
+    except Exception as e:
+        st.error(f"Erreur lors du calcul SHAP : {e}")
 
 # ---------- Onglet LSTM ----------
 with tab_lstm:
