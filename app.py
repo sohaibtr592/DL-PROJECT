@@ -1,4 +1,6 @@
 import json
+import time
+
 import joblib
 import numpy as np
 import pandas as pd
@@ -6,6 +8,7 @@ import streamlit as st
 
 import torch
 import torch.nn as nn
+import shap
 
 
 # =====================================================
@@ -83,6 +86,14 @@ def prepare_sequential_data(df, feature_cols, seq_len=10):
     X_all_scaled = scaler.transform(X_all)
 
     return df_seq, X_all, X_all_scaled
+
+
+@st.cache_resource
+def get_shap_explainer():
+    """Explainer SHAP pour le RandomForest (explainability locale)."""
+    rf = load_rf_model()
+    explainer = shap.TreeExplainer(rf)
+    return explainer
 
 
 # =====================================================
@@ -180,6 +191,8 @@ SEQ_LEN = 10
 
 if "idx_last" not in st.session_state:
     st.session_state.idx_last = SEQ_LEN - 1  # première position exploitable
+if "is_replaying" not in st.session_state:
+    st.session_state.is_replaying = False
 
 
 # =====================================================
@@ -242,7 +255,7 @@ else:
 
 
 # =====================================================
-# 7) SIDEBAR – Navigation temporelle + exploration de classes
+# 7) SIDEBAR – Navigation temporelle + exploration + replay
 # =====================================================
 
 st.sidebar.header("⚙️ Navigation temporelle")
@@ -272,6 +285,31 @@ st.session_state.idx_last = st.sidebar.slider(
 
 idx_last = st.session_state.idx_last
 st.sidebar.write(f"Index sélectionné : `{idx_last}`")
+
+# === Mode replay temporel ===
+st.sidebar.markdown("---")
+st.sidebar.subheader("▶️ Replay temporel")
+
+replay_speed = st.sidebar.slider(
+    "Vitesse (secondes entre deux pas)",
+    min_value=0.05,
+    max_value=1.0,
+    value=0.2,
+    step=0.05
+)
+
+if st.sidebar.button("▶️ Lancer / arrêter le replay"):
+    st.session_state.is_replaying = not st.session_state.is_replaying
+
+if st.session_state.is_replaying:
+    # avancer d'un pas
+    if st.session_state.idx_last < max_idx:
+        st.session_state.idx_last += 1
+        time.sleep(replay_speed)
+        st.experimental_rerun()
+    else:
+        # fin de la série → on arrête le replay
+        st.session_state.is_replaying = False
 
 # exploration par classe
 st.sidebar.markdown("---")
@@ -356,7 +394,7 @@ st.markdown("---")
 # 10) Onglets : RandomForest vs LSTM
 # =====================================================
 
-tab_rf, tab_lstm = st.tabs(["🌲 RandomForest (ML)", "🧠 LSTM + RMSprop (DL)"])
+tab_rf, tab_lstm = st.tabs(["🌲 RandomForest (ML) + SHAP", "🧠 LSTM + RMSprop (DL)"])
 
 
 # ---------- Onglet RandomForest ----------
@@ -366,6 +404,9 @@ with tab_rf:
     **RandomForest** est un ensemble d'arbres de décision.
     Il ne traite pas directement la structure temporelle, mais des **features tabulaires**
     (accélérations, gyroscopes, champ magnétique, angles + lags créés lors de la Phase 1).
+
+    Dans cet onglet, on affiche aussi une **explication locale SHAP** pour cette prédiction :
+    quelles features poussent la décision vers la classe prédite ? 
     """)
 
     rf = load_rf_model()
@@ -398,6 +439,45 @@ with tab_rf:
     # Parsing / résumé du graphe de probas RF
     st.markdown("**Analyse automatique des probabilités (RandomForest) :**")
     st.info(describe_proba_distribution(proba_df_rf))
+
+    # ===== Explainability locale avec SHAP =====
+    st.markdown("---")
+    st.subheader("🧐 Explication locale de la prédiction (SHAP)")
+
+    explainer = get_shap_explainer()
+    shap_values = explainer.shap_values(X_rf)
+
+    # Pour un problème multi-classes, shap_values est une liste : un array par classe
+    classes_list = list(rf.classes_)
+    class_index = classes_list.index(pred_class_rf)
+
+    shap_for_pred = shap_values[class_index][0]  # (n_features,)
+    shap_df = pd.DataFrame({
+        "feature": feature_cols,
+        "shap_value": shap_for_pred,
+        "importance_abs": np.abs(shap_for_pred)
+    }).sort_values("importance_abs", ascending=False)
+
+    top_k_shap = 10
+    top_shap_df = shap_df.head(top_k_shap)
+
+    c_s1, c_s2 = st.columns(2)
+    with c_s1:
+        st.write(f"**Top {top_k_shap} features les plus influentes (SHAP) :**")
+        st.dataframe(
+            top_shap_df[["feature", "shap_value"]],
+            use_container_width=True
+        )
+    with c_s2:
+        st.bar_chart(
+            top_shap_df.set_index("feature")["importance_abs"],
+            height=300
+        )
+
+    st.caption(
+        "Les valeurs positives poussent la prédiction vers la classe actuelle, "
+        "les valeurs négatives la poussent dans la direction opposée."
+    )
 
 
 # ---------- Onglet LSTM ----------
@@ -492,5 +572,6 @@ with st.expander("📊 Résumé des performances globales (sur le jeu de test)",
 
     👉 L'application Web permet de visualiser, pour un instant donné,
     comment **ML classique** et **Deep Learning séquentiel** se comportent sur les mêmes données,
-    et d'interpréter leurs décisions via les courbes temporelles et les distributions de probabilités.
+    et d'interpréter leurs décisions via les courbes temporelles, les distributions de probabilités
+    et maintenant l'**explainability locale (SHAP)** pour RandomForest.
     """)
