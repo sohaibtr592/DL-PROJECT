@@ -12,7 +12,7 @@ import shap
 
 
 # =====================================================
-# 1) Définition du modèle LSTM (même archi que notebook)
+# 1) Définition du modèle LSTM (comme dans ton notebook)
 # =====================================================
 
 class LSTMClassifier(nn.Module):
@@ -22,7 +22,7 @@ class LSTMClassifier(nn.Module):
             input_size=input_dim,
             hidden_size=hidden_dim,
             num_layers=num_layers,
-            batch_first=True
+            batch_first=True,
         )
         self.fc = nn.Linear(hidden_dim, num_classes)
 
@@ -35,12 +35,11 @@ class LSTMClassifier(nn.Module):
 
 
 # =====================================================
-# 2) Chargement des données / modèles (avec cache)
+# 2) Chargement des data / modèles (avec cache)
 # =====================================================
 
 @st.cache_data
 def load_data_and_features():
-    """Charge le dataset préparé et la liste des features."""
     df = pd.read_csv("df_ready_for_app.csv")
     with open("feature_cols.json", "r") as f:
         feature_cols = json.load(f)
@@ -49,36 +48,26 @@ def load_data_and_features():
 
 @st.cache_resource
 def load_rf_model():
-    """Charge le modèle RandomForest entraîné (Phase 1)."""
     return joblib.load("random_forest.pkl")
 
 
 @st.cache_resource
 def load_lstm_model(input_dim, num_classes, hidden_dim=64, num_layers=1):
-    """Charge le modèle LSTM (poids) + retourne le device."""
-    device = torch.device("cpu")   # Streamlit Cloud = CPU
+    device = torch.device("cpu")
     model = LSTMClassifier(input_dim, hidden_dim, num_layers, num_classes).to(device)
-
     state_dict = torch.load("lstm_rmsprop.pt", map_location=device)
     model.load_state_dict(state_dict)
     model.eval()
-
     return model, device
 
 
 @st.cache_resource
 def load_scaler_lstm():
-    """Charge le scaler utilisé pendant l'entraînement du LSTM."""
-    scaler = joblib.load("scaler_lstm.pkl")
-    return scaler
+    return joblib.load("scaler_lstm.pkl")
 
 
 @st.cache_data
 def prepare_sequential_data(df, feature_cols, seq_len=10):
-    """
-    Trie le dataframe dans l'ordre temporel, prépare X_all (features)
-    et pré-calcul X_all_scaled pour le LSTM.
-    """
     df_seq = df.sort_values("timestamp").reset_index(drop=True)
     X_all = df_seq[feature_cols].values.astype("float32")
 
@@ -90,10 +79,8 @@ def prepare_sequential_data(df, feature_cols, seq_len=10):
 
 @st.cache_resource
 def get_shap_explainer():
-    """Explainer SHAP pour le RandomForest (explainability locale)."""
     rf = load_rf_model()
-    explainer = shap.TreeExplainer(rf)
-    return explainer
+    return shap.TreeExplainer(rf)
 
 
 # =====================================================
@@ -101,20 +88,12 @@ def get_shap_explainer():
 # =====================================================
 
 def create_seq_from_index(X_all_scaled, idx_last, seq_len=10):
-    """
-    Construit une séquence (seq_len, n_features) terminée à idx_last.
-    idx_last doit être >= seq_len-1.
-    """
     start = idx_last - seq_len + 1
-    X_seq = X_all_scaled[start:idx_last+1, :]
+    X_seq = X_all_scaled[start:idx_last + 1, :]
     return X_seq
 
 
 def describe_time_window(series_vals):
-    """
-    Génère un court résumé textuel d'une série temporelle :
-    min, max, moyenne, tendance, volatilité.
-    """
     val_min = float(np.min(series_vals))
     val_max = float(np.max(series_vals))
     val_mean = float(np.mean(series_vals))
@@ -123,7 +102,6 @@ def describe_time_window(series_vals):
     amplitude = max(val_max - val_min, 1e-8)
     delta = end_val - start_val
 
-    # tendance globale
     if delta > 0.15 * amplitude:
         trend = "globalement **croissante**"
     elif delta < -0.15 * amplitude:
@@ -150,10 +128,6 @@ def describe_time_window(series_vals):
 
 
 def describe_proba_distribution(proba_df):
-    """
-    Analyse la distribution de probas : classe dominante + niveau de confiance.
-    proba_df doit être trié par probabilité décroissante.
-    """
     top = proba_df.iloc[0]
     cls = int(top["id_class"])
     p_max = float(top["probabilité"])
@@ -179,7 +153,7 @@ def describe_proba_distribution(proba_df):
 
 
 # =====================================================
-# 4) CONFIG Streamlit + état
+# 4) Config Streamlit + état
 # =====================================================
 
 st.set_page_config(
@@ -190,18 +164,17 @@ st.set_page_config(
 SEQ_LEN = 10
 
 if "idx_last" not in st.session_state:
-    st.session_state.idx_last = SEQ_LEN - 1  # première position exploitable
+    st.session_state.idx_last = SEQ_LEN - 1
 if "is_replaying" not in st.session_state:
     st.session_state.is_replaying = False
 
 
 # =====================================================
-# 5) En-tête + contexte (avec description dataset)
+# 5) Contexte + description dataset
 # =====================================================
 
 st.title("🕒 Classification de signaux capteurs – ML vs Deep Learning")
 
-# On charge une première fois pour donner des chiffres dans le contexte
 df_meta, feature_cols_meta = load_data_and_features()
 n_samples, n_cols = df_meta.shape
 n_features = len(feature_cols_meta)
@@ -210,29 +183,21 @@ n_classes = df_meta["id_class"].nunique()
 with st.expander("🧬 Contexte du projet et description des données", expanded=True):
     st.markdown(f"""
     Ce projet porte sur des **données de capteurs d'une montre connectée**.
-    
+
     - Nombre d'échantillons après préparation : **{n_samples}**  
-    - Nombre de features utilisées comme entrée : **{n_features}**  
-      (accélérations, gyroscopes, champ magnétique, angles + quelques lags temporels)
-    - Nombre de classes finales `id_class` (après regroupement `id_group`) : **{n_classes}**
+    - Nombre de features : **{n_features}**  
+    - Nombre de classes (`id_class`) après regroupement : **{n_classes}**
 
-    Chaque ligne du dataset correspond à **un instant temporel** :
-    `timestamp` + valeurs des capteurs.  
-    Les IDs d'intervalle ont été regroupés en **11 classes** plus équilibrées pour faciliter
-    l'apprentissage.
+    Chaque ligne correspond à un **instant de mesure** (timestamp + valeurs des capteurs).
+    Les IDs d'intervalle ont été regroupés en 11 classes plus équilibrées.
 
-    - **Phase 1 – Machine Learning classique :**
-      - Vérification que les données forment bien une **time series**
-      - Préparation / nettoyage / création de lags
-      - Entraînement de plusieurs modèles (Régression Logistique, RandomForest, Gradient Boosting…)
+    **Phase 1 – Machine Learning classique :**
+    - vérification série temporelle, nettoyage, lags
+    - modèles : Régression Logistique, RandomForest, Gradient Boosting…
 
-    - **Phase 2 – Deep Learning :**
-      - Modèle **MLP** (multilayer perceptron) avec différents schémas de descente de gradient
-      - Modèle **LSTM** + RMSprop, qui exploite la dynamique sur une fenêtre de 10 instants
-
-    L'application ci-dessous permet de tester et comparer en direct :
-    - 🌲 un modèle **RandomForest** (ML tabulaire, non séquentiel)
-    - 🧠 un modèle **LSTM + RMSprop** (DL séquentiel sur fenêtre de 10 instants)
+    **Phase 2 – Deep Learning :**
+    - MLP avec différentes variantes de descente de gradient
+    - LSTM + RMSprop sur une fenêtre de 10 instants.
     """)
 
 
@@ -246,7 +211,6 @@ df_seq, X_all, X_all_scaled = prepare_sequential_data(df, feature_cols, seq_len=
 num_features = len(feature_cols)
 num_classes = len(np.unique(df["id_class"]))
 
-# mapping id_class -> id_group (si PRESENT)
 if "id_group" in df_seq.columns:
     map_df = df_seq[["id_class", "id_group"]].drop_duplicates().sort_values("id_class")
     idclass_to_group = dict(zip(map_df["id_class"], map_df["id_group"]))
@@ -255,7 +219,7 @@ else:
 
 
 # =====================================================
-# 7) SIDEBAR – Navigation temporelle + exploration + replay
+# 7) Sidebar – navigation + replay
 # =====================================================
 
 st.sidebar.header("⚙️ Navigation temporelle")
@@ -263,7 +227,6 @@ st.sidebar.header("⚙️ Navigation temporelle")
 max_idx = len(df_seq) - 1
 min_idx = SEQ_LEN - 1
 
-# boutons Prev / Next / Random
 c_prev, c_next, c_rand = st.sidebar.columns(3)
 with c_prev:
     if st.button("⬅️ Prev"):
@@ -275,7 +238,6 @@ with c_rand:
     if st.button("🎲 Random"):
         st.session_state.idx_last = int(np.random.randint(min_idx, max_idx + 1))
 
-# slider synchronisé
 st.session_state.idx_last = st.sidebar.slider(
     "Index temporel (position dans la série)",
     min_value=min_idx,
@@ -286,7 +248,7 @@ st.session_state.idx_last = st.sidebar.slider(
 idx_last = st.session_state.idx_last
 st.sidebar.write(f"Index sélectionné : `{idx_last}`")
 
-# === Mode replay temporel ===
+# Replay temporel
 st.sidebar.markdown("---")
 st.sidebar.subheader("▶️ Replay temporel")
 
@@ -295,20 +257,18 @@ replay_speed = st.sidebar.slider(
     min_value=0.05,
     max_value=1.0,
     value=0.2,
-    step=0.05
+    step=0.05,
 )
 
 if st.sidebar.button("▶️ Lancer / arrêter le replay"):
     st.session_state.is_replaying = not st.session_state.is_replaying
 
 if st.session_state.is_replaying:
-    # avancer d'un pas
     if st.session_state.idx_last < max_idx:
         st.session_state.idx_last += 1
         time.sleep(replay_speed)
-        st.experimental_rerun()
+        st.rerun()          # <-- nouveau au lieu de st.experimental_rerun()
     else:
-        # fin de la série → on arrête le replay
         st.session_state.is_replaying = False
 
 # exploration par classe
@@ -327,9 +287,8 @@ if st.sidebar.button("Aller à un exemple de cette classe"):
         st.session_state.idx_last = int(np.random.choice(indices))
         idx_last = st.session_state.idx_last
     else:
-        st.sidebar.warning("Pas d'échantillon pour cette classe dans df_seq.")
+        st.sidebar.warning("Pas d'échantillon pour cette classe.")
 
-# choix de la feature à tracer
 feature_to_plot = st.sidebar.selectbox(
     "Feature à afficher sur la fenêtre temporelle :",
     feature_cols,
@@ -338,7 +297,7 @@ feature_to_plot = st.sidebar.selectbox(
 
 
 # =====================================================
-# 8) Affichage info observation
+# 8) Info observation + graphe temporel + résumé automatique
 # =====================================================
 
 row = df_seq.iloc[idx_last]
@@ -348,42 +307,31 @@ true_group = idclass_to_group.get(true_class, "N/A")
 st.subheader("🧾 Observation sélectionnée")
 
 c1, c2 = st.columns(2)
-
 with c1:
     st.write("**Timestamp :**", row["timestamp"])
     st.write("**Classe réelle (id_class) :**", true_class)
     st.write("**id_group associé :**", true_group)
-
 with c2:
     st.write("**Features au dernier instant (t)**")
     st.dataframe(row[feature_cols].to_frame().T)
 
 st.markdown("---")
 
-
-# =====================================================
-# 9) Contexte temporel (fenêtre LSTM) + parsing du graphe
-# =====================================================
-
 st.subheader("📈 Contexte temporel utilisé par le LSTM")
 
 start_idx = idx_last - SEQ_LEN + 1
-window_df = df_seq.iloc[start_idx:idx_last+1].copy()
-
+window_df = df_seq.iloc[start_idx:idx_last + 1].copy()
 st.line_chart(
     window_df.set_index("timestamp")[feature_to_plot],
     height=250
 )
-
 st.caption(
     f"Évolution de `{feature_to_plot}` sur les {SEQ_LEN} instants "
     f"qui précèdent t (fenêtre d'entrée du LSTM)."
 )
 
-# Analyse textuelle automatique du graphe
 series_vals = window_df[feature_to_plot].values
 summary_text = describe_time_window(series_vals)
-
 st.markdown("**Résumé automatique de la fenêtre temporelle :**")
 st.info(summary_text)
 
@@ -391,23 +339,15 @@ st.markdown("---")
 
 
 # =====================================================
-# 10) Onglets : RandomForest vs LSTM
+# 9) Tabs : RF vs LSTM
 # =====================================================
 
 tab_rf, tab_lstm = st.tabs(["🌲 RandomForest (ML) + SHAP", "🧠 LSTM + RMSprop (DL)"])
 
 
-# ---------- Onglet RandomForest ----------
+# ---------- TAB RandomForest ----------
 with tab_rf:
     st.subheader("🌲 RandomForest – Machine Learning classique")
-    st.markdown("""
-    **RandomForest** est un ensemble d'arbres de décision.
-    Il ne traite pas directement la structure temporelle, mais des **features tabulaires**
-    (accélérations, gyroscopes, champ magnétique, angles + lags créés lors de la Phase 1).
-
-    Dans cet onglet, on affiche aussi une **explication locale SHAP** pour cette prédiction :
-    quelles features poussent la décision vers la classe prédite ? 
-    """)
 
     rf = load_rf_model()
     X_rf = row[feature_cols].values.reshape(1, -1)
@@ -420,7 +360,7 @@ with tab_rf:
 
     proba_df_rf = pd.DataFrame({
         "id_class": rf.classes_,
-        "probabilité": proba_rf
+        "probabilité": proba_rf,
     }).sort_values("probabilité", ascending=False)
 
     top_k = 5
@@ -433,35 +373,31 @@ with tab_rf:
     with c_rf2:
         st.bar_chart(
             top_df_rf.set_index("id_class")["probabilité"],
-            height=250
+            height=250,
         )
 
-    # Parsing / résumé du graphe de probas RF
     st.markdown("**Analyse automatique des probabilités (RandomForest) :**")
     st.info(describe_proba_distribution(proba_df_rf))
 
-        # ===== Explainability locale avec SHAP =====
+    # ===== Explainability locale avec SHAP (corrigé) =====
     st.markdown("---")
     st.subheader("🧐 Explication locale de la prédiction (SHAP)")
 
     try:
         explainer = get_shap_explainer()
-        shap_values = explainer.shap_values(X_rf)   # X_rf : (1, n_features)
+        shap_values = explainer.shap_values(X_rf)
 
-        # Cas multi-classes (liste d'arrays) ou array unique
+        # multi-classes : shap_values = list d'arrays
         if isinstance(shap_values, list):
-            # shap_values[i] : (1, n_features) pour la classe rf.classes_[i]
             classes_list = list(rf.classes_)
             class_index = classes_list.index(pred_class_rf)
-            shap_vec = shap_values[class_index][0]
+            shap_vec = shap_values[class_index][0]  # (n_features,)
         else:
-            # shap_values : (1, n_features)
             shap_vec = shap_values[0]
 
         shap_vec = np.array(shap_vec).reshape(-1)
-
-        # Sécurité : s'assurer que la longueur correspond au nombre de features
         n_feat = len(feature_cols)
+
         if len(shap_vec) != n_feat:
             min_len = min(len(shap_vec), n_feat)
             shap_vec = shap_vec[:min_len]
@@ -472,7 +408,7 @@ with tab_rf:
         shap_df = pd.DataFrame({
             "feature": feat_for_shap,
             "shap_value": shap_vec,
-            "importance_abs": np.abs(shap_vec)
+            "importance_abs": np.abs(shap_vec),
         }).sort_values("importance_abs", ascending=False)
 
         top_k_shap = 10
@@ -483,36 +419,32 @@ with tab_rf:
             st.write(f"**Top {top_k_shap} features les plus influentes (SHAP) :**")
             st.dataframe(
                 top_shap_df[["feature", "shap_value"]],
-                use_container_width=True
+                use_container_width=True,
             )
         with c_s2:
             st.bar_chart(
                 top_shap_df.set_index("feature")["importance_abs"],
-                height=300
+                height=300,
             )
 
         st.caption(
             "Les valeurs positives poussent la prédiction vers la classe actuelle, "
-            "les valeurs négatives la poussent dans la direction opposée."
+            "les valeurs négatives la poussent vers une autre classe."
         )
 
     except Exception as e:
         st.error(f"Erreur lors du calcul SHAP : {e}")
 
-# ---------- Onglet LSTM ----------
+
+# ---------- TAB LSTM ----------
 with tab_lstm:
     st.subheader("🧠 LSTM + RMSprop – Modèle séquentiel")
-    st.markdown("""
-    Le **LSTM** reçoit en entrée une séquence de longueur 10  
-    (les 10 derniers instants de la série) et prédit la classe au temps t.
-    L'optimiseur utilisé est **RMSprop**, bien adapté aux réseaux récurrents.
-    """)
 
     model_lstm, device = load_lstm_model(
         input_dim=num_features,
         num_classes=num_classes,
         hidden_dim=64,
-        num_layers=1
+        num_layers=1,
     )
 
     X_seq = create_seq_from_index(X_all_scaled, idx_last, seq_len=SEQ_LEN)
@@ -529,7 +461,7 @@ with tab_lstm:
     classes_lstm = sorted(df["id_class"].unique())
     proba_df_lstm = pd.DataFrame({
         "id_class": classes_lstm,
-        "probabilité": probs
+        "probabilité": probs,
     }).sort_values("probabilité", ascending=False)
 
     top_k = 5
@@ -542,20 +474,19 @@ with tab_lstm:
     with c_l2:
         st.bar_chart(
             top_df_lstm.set_index("id_class")["probabilité"],
-            height=250
+            height=250,
         )
 
-    # Parsing / résumé du graphe de probas LSTM
     st.markdown("**Analyse automatique des probabilités (LSTM) :**")
     st.info(describe_proba_distribution(proba_df_lstm))
 
 
 # =====================================================
-# 11) Synthèse RF vs LSTM sur l’instant sélectionné
+# 10) Synthèse RF vs LSTM
 # =====================================================
 
 st.markdown("---")
-st.subheader("🔍 Synthèse de comparaison des modèles pour l'instant t sélectionné")
+st.subheader("🔍 Synthèse de comparaison des modèles pour l'instant sélectionné")
 
 rf_ok = (pred_class_rf == true_class)
 lstm_ok = (pred_class_lstm == true_class)
@@ -566,31 +497,23 @@ txt_synth = f"""
 - 🧠 **LSTM + RMSprop** : prédiction = `{pred_class_lstm}` → {"✅ correcte" if lstm_ok else "❌ incorrecte"}  
 - 🔁 Les deux modèles { "donnent la **même** classe." if same_pred else "donnent des **classes différentes**." }
 """
-
 st.markdown(txt_synth)
 
 
 # =====================================================
-# 12) Résumé des performances globales
+# 11) Résumé global (facultatif)
 # =====================================================
 
-st.markdown("---")
 with st.expander("📊 Résumé des performances globales (sur le jeu de test)", expanded=False):
     st.markdown("""
-    **Modèles Machine Learning :**
-    - 🌲 RandomForest (stratifié, avec lags)  
-      - Accuracy test ≈ **0.996**
-      - Modèle robuste et très performant sur la majorité des classes.
+    **Machine Learning :**
+    - 🌲 RandomForest (avec lags) — Accuracy test ≈ **0.996**
 
-    **Modèles Deep Learning :**
-    - 🧠 MLP + SGD + momentum (mini-batch)  
-      - Accuracy test ≈ **0.97**
-    - 🧠 LSTM + RMSprop  
-      - Accuracy test ≈ **0.973**
-      - Meilleure prise en compte de la dynamique temporelle (fenêtre de 10 instants).
+    **Deep Learning :**
+    - 🧠 MLP + SGD + momentum — Accuracy test ≈ **0.97**
+    - 🧠 LSTM + RMSprop — Accuracy test ≈ **0.973**
 
-    👉 L'application Web permet de visualiser, pour un instant donné,
-    comment **ML classique** et **Deep Learning séquentiel** se comportent sur les mêmes données,
-    et d'interpréter leurs décisions via les courbes temporelles, les distributions de probabilités
-    et maintenant l'**explainability locale (SHAP)** pour RandomForest.
+    L'application permet de comparer les prédictions,
+    visualiser la dynamique temporelle, et interpréter les décisions
+    via **SHAP** pour le RandomForest.
     """)
